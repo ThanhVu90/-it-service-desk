@@ -4,7 +4,7 @@ A working C# portfolio application for the operational details that spreadsheet-
 
 **ASP.NET Core 10 · EF Core · SQLite · Cookie authentication · xUnit**
 
-[Hướng dẫn học bằng tiếng Việt](docs/LEARNING.vi.md) · [Architecture](docs/ARCHITECTURE.md) · [Verification](docs/VERIFICATION.md) · [API](docs/API.md)
+[Architecture](docs/ARCHITECTURE.md) · [Verification](docs/VERIFICATION.md) · [API](docs/API.md)
 
 ![Support queue](docs/images/support-queue.png)
 
@@ -82,7 +82,7 @@ src/ServiceDesk/
   wwwroot/      Responsive UI without a frontend build toolchain
 tests/ServiceDesk.Tests/  HTTP integration and domain tests
 scripts/                 Local demo launcher
-docs/                    Architecture, evidence and learning guide
+docs/                    Architecture and verification evidence
 ```
 
 ## Boundaries and next steps
@@ -91,5 +91,5 @@ The verified release uses SQLite. A PostgreSQL provider can be selected with `Co
 
 Before production use: replace seeded users with a real provisioning/identity flow, implement account revocation/password recovery, review encryption and shared key storage, add database migrations and PostgreSQL integration tests, configure trusted proxy handling and HTTPS, and implement backups/restore tests. Audit rows are append-only through application code; they are not tamper-proof against a database administrator. Login throttling is per process and remote IP, not distributed. Asset inventory is currently unpaged, appropriate for the small demo only. No notification delivery, attachments, business calendar or uptime guarantee is claimed.
 
-Developed with AI assistance. The accompanying learning guide is designed for the owner to understand, modify and explain the implementation rather than present generated code as unexamined personal expertise.
+Developed with AI assistance.
 
