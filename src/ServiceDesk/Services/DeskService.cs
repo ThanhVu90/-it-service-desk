@@ -65,6 +65,20 @@ public sealed class DeskService(DeskDb db, TimeProvider clock)
         Audit(actor, "Asset", id, "Returned");
         await db.SaveChangesAsync();
     }
+    public async Task LockUserAsync(Actor actor, int userId)
+    {
+        if (actor.Role != Roles.Admin) throw new RuleException(403, "Administrator access required.");
+        var target = await db.Users.FindAsync(userId) ?? throw new RuleException(404, "User not found.");
+        if (target.Role == Roles.Admin)
+        {
+            var otherActiveAdmins = await db.Users.CountAsync(x => x.Role == Roles.Admin && x.IsActive && x.Id != userId);
+            if (otherActiveAdmins == 0) throw new RuleException(409, "The last active administrator cannot be locked out.");
+        }
+        target.IsActive = false;
+        target.SessionVersion++;
+        Audit(actor, "User", userId, "Locked (account revoked)");
+        await db.SaveChangesAsync(); // EF wraps the lock and the audit insert in one transaction; failed audit lock rolls back.
+    }
     private static void RequireAdmin(Actor actor)
     {
         if (actor.Role != Roles.Admin) throw new RuleException(403, "Administrator access required.");

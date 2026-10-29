@@ -1,3 +1,12 @@
+# Verification evidence — 29 October 2026 (addendum: P0-2 session revocation)
+
+P0-2 (lock accounts, revoke live sessions) landed on branch `upgrade/p0-2-session-revocation`:
+
+- Migration `20261029150755_UserLockoutState` adds `IsActive` (default 1) and `SessionVersion` (default 1) to `Users`; upgraded databases keep every existing account active.
+- Acceptance tests written first (7, in `SessionRevocationTests`): all red before the implementation against the migration-only commit; the full suite then reached **42 passed, 0 failed** locally (28 original + 7 migration/backup + 7 revocation).
+- Hand-run demo against a fresh seeded file: admin signs in on one "window", a technician on another; admin locks the technician (`POST /api/users/3/lock` → 204); the technician's immediate next request with the same cookie is rejected — server log `Session for user 3 rejected (account-locked)` and HTTP 401. Server logs contain no password or cookie material.
+- The legacy-adoption test from P0-1 was reframed to pin the "pre-migration schema" to the baseline migration instead of the live model, so it stays correct as future migrations pile up.
+
 # Verification evidence — 29 October 2026
 
 P0-1 (controlled migrations, legacy adoption, backup/restore) was implemented on branch `upgrade/p0-1-migration`:

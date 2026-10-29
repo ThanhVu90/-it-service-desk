@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Claims;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
@@ -34,6 +35,7 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
     o.Cookie.SecurePolicy = builder.Environment.IsDevelopment() || builder.Environment.IsEnvironment("Testing") ? CookieSecurePolicy.SameAsRequest : CookieSecurePolicy.Always;
     o.ExpireTimeSpan = TimeSpan.FromMinutes(30);
     o.SlidingExpiration = false;
+    o.Events.OnValidatePrincipal = SessionValidation.ValidateAsync;
     o.Events.OnRedirectToLogin = c => { c.Response.StatusCode = 401; return Task.CompletedTask; };
     o.Events.OnRedirectToAccessDenied = c => { c.Response.StatusCode = 403; return Task.CompletedTask; };
 });
@@ -82,16 +84,17 @@ app.MapPost("/api/login", async (LoginRequest input, DeskDb db, HttpContext cont
         return Results.Problem(statusCode: 400, title: "Provide a valid email and password.");
     var user = await db.Users.SingleOrDefaultAsync(x => x.Email == input.Email.Trim().ToLowerInvariant());
     var hasher = new PasswordHasher<User>();
-    if (user == null || hasher.VerifyHashedPassword(user, user.PasswordHash, input.Password) == PasswordVerificationResult.Failed)
+    if (user == null || hasher.VerifyHashedPassword(user, user.PasswordHash, input.Password) == PasswordVerificationResult.Failed || !user.IsActive)
         return Results.Problem(statusCode: 401, title: "Incorrect email or password.");
-    var identity = new ClaimsIdentity(new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Name), new Claim(ClaimTypes.Role, user.Role) }, CookieAuthenticationDefaults.AuthenticationScheme);
+    var identity = new ClaimsIdentity(new[] { new Claim(ClaimTypes.NameIdentifier, user.Id.ToString()), new Claim(ClaimTypes.Name, user.Name), new Claim(ClaimTypes.Role, user.Role), new Claim(SessionValidation.SessionVersionClaim, user.SessionVersion.ToString(CultureInfo.InvariantCulture)) }, CookieAuthenticationDefaults.AuthenticationScheme);
     await context.SignInAsync(CookieAuthenticationDefaults.AuthenticationScheme, new ClaimsPrincipal(identity));
     return Results.Ok(new { user.Id, user.Name, user.Role });
 }).RequireRateLimiting("login");
 var api = app.MapGroup("/api").RequireAuthorization();
 api.MapGet("/me", (HttpContext c) => new { id = Current(c).Id, name = c.User.Identity!.Name, role = Current(c).Role });
 api.MapPost("/logout", async (HttpContext c) => { await c.SignOutAsync(); return Results.NoContent(); });
-api.MapGet("/users", async (DeskDb db) => await db.Users.OrderBy(x => x.Name).Select(x => new { x.Id, x.Name, x.Role }).ToListAsync()).RequireAuthorization(p => p.RequireRole(Roles.Admin));
+api.MapGet("/users", async (DeskDb db) => await db.Users.OrderBy(x => x.Name).Select(x => new { x.Id, x.Name, x.Role, x.IsActive }).ToListAsync()).RequireAuthorization(p => p.RequireRole(Roles.Admin));
+api.MapPost("/users/{id:int}/lock", async (int id, DeskService service, HttpContext c) => { await service.LockUserAsync(Current(c), id); return Results.NoContent(); }).RequireAuthorization(p => p.RequireRole(Roles.Admin));
 api.MapGet("/dashboard", async (DeskService service, HttpContext c) =>
 {
     var query = service.Visible(Current(c));

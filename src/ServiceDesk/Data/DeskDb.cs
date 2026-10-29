@@ -20,6 +20,9 @@ public sealed class DeskDb(DbContextOptions<DeskDb> options) : DbContext(options
         b.Entity<AuditEvent>().HasIndex(x => new { x.Entity, x.EntityId });
         b.Entity<User>().HasIndex(x => x.Email).IsUnique();
         b.Entity<User>().Property(x => x.Email).HasMaxLength(254);
+        // Explicit DB defaults keep exactly one meaning on upgrade: existing users stay active with version 1.
+        b.Entity<User>().Property(x => x.IsActive).HasDefaultValue(true);
+        b.Entity<User>().Property(x => x.SessionVersion).HasDefaultValue(1);
         b.Entity<Ticket>().Property(x => x.Version).IsConcurrencyToken();
         b.Entity<Ticket>().Property(x => x.Title).HasMaxLength(160);
         b.Entity<Ticket>().HasOne<User>().WithMany().HasForeignKey(x => x.RequesterId).OnDelete(DeleteBehavior.Restrict);

@@ -165,6 +165,11 @@ namespace ServiceDesk.Data.Migrations
                         .HasMaxLength(254)
                         .HasColumnType("TEXT");
 
+                    b.Property<bool>("IsActive")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(true);
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -176,6 +181,11 @@ namespace ServiceDesk.Data.Migrations
                     b.Property<string>("Role")
                         .IsRequired()
                         .HasColumnType("TEXT");
+
+                    b.Property<int>("SessionVersion")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER")
+                        .HasDefaultValue(1);
 
                     b.HasKey("Id");
 
