@@ -45,17 +45,16 @@ public sealed class DatabaseBootstrapTests : IDisposable
         var file = Path.Combine(root, "legacy.db");
         await using (var db = NewDb(file))
         {
-            await db.Database.EnsureCreatedAsync(); // Simulates the pre-migration bootstrap.
-            await db.Database.ExecuteSqlRawAsync("DROP INDEX IF EXISTS IX_AuditEvents_Entity_EntityId");
-            db.Users.AddRange(new User { Email = "alex@example.test", Name = "Alex", Role = Roles.Employee, PasswordHash = "x" }, new User { Email = "sam@example.test", Name = "Sam", Role = Roles.Technician, PasswordHash = "x" });
-            await db.SaveChangesAsync();
-            var now = DateTime.UtcNow;
-            db.Tickets.Add(new Ticket { Title = "Pre-migration ticket", Description = "Data that must survive", RequesterId = 1, CreatedAt = now, DueAt = now });
-            db.Assets.Add(new Asset { Tag = "LT-001", Model = "Legacy asset" });
-            await db.SaveChangesAsync();
-            db.Assignments.Add(new Assignment { AssetId = 1, UserId = 2, AssignedAt = now });
-            db.AuditEvents.Add(new AuditEvent { ActorId = 1, Entity = "Ticket", EntityId = 1, Action = "Created", At = now });
-            await db.SaveChangesAsync();
+            // Reconstruct the shape of the pre-migration release: the baseline migration's schema without any migration history.
+            await db.Database.MigrateAsync(db.Database.GetMigrations().First());
+            await db.Database.ExecuteSqlRawAsync("DROP TABLE IF EXISTS \"__EFMigrationsLock\"");
+            await db.Database.ExecuteSqlRawAsync("DROP TABLE \"__EFMigrationsHistory\"");
+            // Seed with plain SQL because the live model already knows about columns this old release never had.
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO Users (Email, Name, Role, PasswordHash) VALUES ('alex@example.test','Alex','Employee','x'), ('sam@example.test','Sam','Technician','x')");
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO Tickets (Title, Description, RequesterId, Priority, Status, CreatedAt, DueAt, Resolution, Version) VALUES ('Pre-migration ticket','Data that must survive',1,1,0,'2026-01-01 00:00:00','2026-01-02 00:00:00','',1)");
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO Assets (Tag, Model, Version) VALUES ('LT-001','Legacy asset',1)");
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO Assignments (AssetId, UserId, AssignedAt) VALUES (1,2,'2026-01-01 00:00:00')");
+            await db.Database.ExecuteSqlRawAsync("INSERT INTO AuditEvents (ActorId, Entity, EntityId, Action, At) VALUES (1,'Ticket',1,'Created','2026-01-01 00:00:00')");
         }
 
         DatabaseBootstrapResult result;
