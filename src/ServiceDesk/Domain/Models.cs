@@ -13,6 +13,12 @@ public sealed class User
     public string Name { get; set; } = "";
     public string Role { get; set; } = Roles.Employee;
     public string PasswordHash { get; set; } = "";
+
+    /// <summary>Administrators set this to false to revoke the account: login is refused and live sessions are rejected.</summary>
+    public bool IsActive { get; set; } = true;
+
+    /// <summary>Raised on every lock so existing cookie principal claims stop matching.</summary>
+    public int SessionVersion { get; set; } = 1;
 }
 public sealed class Ticket
 {
