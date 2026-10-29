@@ -49,21 +49,14 @@ builder.Services.AddRateLimiter(o =>
     o.AddPolicy("login", context => RateLimitPartition.GetFixedWindowLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown", _ => new FixedWindowRateLimiterOptions { PermitLimit = 10, Window = TimeSpan.FromMinutes(1), QueueLimit = 0 }));
 });
 var app = builder.Build();
+app.Use((context, next) => HttpCorrelation.Run(context, next, app.Logger));
 app.Use(async (context, next) =>
 {
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
     if (context.Request.Path.StartsWithSegments("/api")) context.Response.Headers.CacheControl = "no-cache, no-store";
-    try { await next(); }
-    catch (RuleException ex) { await Results.Problem(statusCode: ex.Status, title: ex.Message).ExecuteAsync(context); }
-    catch (DbUpdateConcurrencyException) { await Results.Problem(statusCode: 409, title: "The record changed. Refresh and try again.").ExecuteAsync(context); }
-    catch (DbUpdateException ex)
-    {
-        app.Logger.LogWarning(ex, "Database mutation rejected");
-        await Results.Problem(statusCode: 409, title: "The change conflicts with stored data. Refresh and check your input.").ExecuteAsync(context);
-    }
-    catch (AntiforgeryValidationException) { await Results.Problem(statusCode: 400, title: "Invalid security token. Refresh the page.").ExecuteAsync(context); }
+    await next();
 });
 app.UseDefaultFiles();
 app.UseStaticFiles();
@@ -77,6 +70,18 @@ app.Use(async (context, next) =>
     await next();
 });
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
+app.MapGet("/health/ready", async (DeskDb db) =>
+{
+    try
+    {
+        if (!await db.Database.CanConnectAsync()) return HttpCorrelation.NotReady();
+        // Postgres remains experimental (EnsureCreated bootstrap); only its reachability is probed here.
+        if (db.Database.IsSqlite() && !(await db.Database.GetAppliedMigrationsAsync()).SequenceEqual(db.Database.GetMigrations()))
+            return HttpCorrelation.NotReady();
+        return Results.Ok(new { status = "ready", database = "current" });
+    }
+    catch { return HttpCorrelation.NotReady(); }
+});
 app.MapGet("/api/csrf", (HttpContext context, IAntiforgery csrf) => Results.Ok(new { token = csrf.GetAndStoreTokens(context).RequestToken }));
 app.MapPost("/api/login", async (LoginRequest input, DeskDb db, HttpContext context) =>
 {

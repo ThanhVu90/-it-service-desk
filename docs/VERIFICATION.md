@@ -1,3 +1,12 @@
+# Verification evidence — 29 October 2026 (addendum: P1-2 readiness + correlation)
+
+P1-2 (readiness probe, correlation ids, structured error logs) landed on branch `upgrade/p1-2-readiness`:
+
+- `/health` remains the liveness endpoint; the new `/health/ready` checks reachability **and** that every EF migration is applied on SQLite, returning 503 with a message that names no paths or connection details.
+- 5 acceptance tests written first (4 red against a missing endpoint/behavior, 1 leak guard already green); the full suite then reached **54 passed, 0 failed** (49 + 5).
+- Every response carries `X-Correlation-ID` (caller-supplied values of 8–64 ASCII alphanumerics are honored, otherwise a 12-hex id is generated); validation/unhandled-error bodies embed the same id as `correlationId`.
+- Hand-run demo against a seeded file: readiness 200 → break the store on disk → readiness 503; a validation failure returned 400 with `correlationId 5b3a01e93361`; after the store broke, a login attempt returned 500 with `X-Correlation-ID: 7e62c084d785` and the server log contained exactly `Unhandled request failure 7e62c084d785 POST /api/login`. A scan of the full log found no password, cookie name or connection string.
+
 # Verification evidence — 29 October 2026 (addendum: P1-1 ticket comments)
 
 P1-1 (comments within ticket visibility) landed on branch `upgrade/p1-1-ticket-comments`:
