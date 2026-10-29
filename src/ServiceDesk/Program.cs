@@ -12,6 +12,10 @@ using ServiceDesk.Data;
 using ServiceDesk.Domain;
 using ServiceDesk.Services;
 
+// Maintenance commands run without starting the web app: ServiceDesk db-backup|db-restore --source X --out Y
+if (args.Length > 0 && args[0] is "db-backup" or "db-restore")
+    return ServiceDesk.Data.DbMaintenance.RunCli(args);
+
 var builder = WebApplication.CreateBuilder(args);
 builder.Services.ConfigureHttpJsonOptions(o => o.SerializerOptions.Converters.Add(new JsonStringEnumConverter()));
 builder.Services.AddDbContext<DeskDb>(o =>
@@ -128,15 +132,28 @@ api.MapPost("/assets", async (CreateAsset input, DeskService service, HttpContex
 api.MapPost("/assets/{id:int}/assign", async (int id, AssignAsset input, DeskService service, HttpContext c) => { await service.Assign(Current(c), id, input.UserId, input.Version); return Results.NoContent(); }).RequireAuthorization(p => p.RequireRole(Roles.Admin));
 api.MapPost("/assets/{id:int}/return", async (int id, ReturnAsset input, DeskService service, HttpContext c) => { await service.Return(Current(c), id, input.Version); return Results.NoContent(); }).RequireAuthorization(p => p.RequireRole(Roles.Admin));
 
-if (app.Configuration.GetValue<bool>("Demo:Seed"))
+using (var bootScope = app.Services.CreateScope())
 {
-    if (!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing")) throw new InvalidOperationException("Demo seeding is only allowed in Development or Testing.");
-    using var scope = app.Services.CreateScope();
-    var db = scope.ServiceProvider.GetRequiredService<DeskDb>();
-    await db.Database.EnsureCreatedAsync();
-    await DemoSeed.Run(db, app.Configuration["Demo:Password"] ?? throw new InvalidOperationException("Set Demo__Password before seeding."));
+    var db = bootScope.ServiceProvider.GetRequiredService<DeskDb>();
+    if (db.Database.IsSqlite())
+    {
+        var bootstrap = await DeskDbInitializer.InitializeAsync(db, app.Logger);
+        app.Logger.LogInformation("Database bootstrap: {Action}{Snapshot}", bootstrap.Action, bootstrap.BackupPath is string path ? $" (snapshot: {path})" : string.Empty);
+    }
+    else
+    {
+        // PostgreSQL remains experimental: keep the legacy bootstrap there until it has dedicated integration tests.
+        app.Logger.LogWarning("PostgreSQL is experimental: schema provisioning still uses EnsureCreated; migrations are not applied to it.");
+        if (app.Configuration.GetValue<bool>("Demo:Seed")) await db.Database.EnsureCreatedAsync();
+    }
+    if (app.Configuration.GetValue<bool>("Demo:Seed"))
+    {
+        if (!app.Environment.IsDevelopment() && !app.Environment.IsEnvironment("Testing")) throw new InvalidOperationException("Demo seeding is only allowed in Development or Testing.");
+        await DemoSeed.Run(db, app.Configuration["Demo:Password"] ?? throw new InvalidOperationException("Set Demo__Password before seeding."));
+    }
 }
 await app.RunAsync();
+return 0;
 static Actor Current(HttpContext context) => new(int.Parse(context.User.FindFirstValue(ClaimTypes.NameIdentifier)!), context.User.FindFirstValue(ClaimTypes.Role)!);
 public sealed record LoginRequest(string? Email, string? Password);
 public sealed record CreateTicket(string? Title, string? Description, Priority Priority);
