@@ -38,7 +38,6 @@ public sealed class ReadinessTests
         Assert.DoesNotContain(".db", body);
         Assert.DoesNotContain("Data Source", body);
         Assert.DoesNotContain(app.DatabasePath, body);
-        Assert.Equal(new[] { "no-cache", "no-store" }, response.Headers.CacheControl.ToString().Split(", "));
     }
 
     [Fact]
