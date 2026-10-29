@@ -54,6 +54,7 @@ The four seeded users share the password you choose. There is no embedded defaul
 ## Behavior worth inspecting
 
 - **Object-level authorization:** list filters, dashboard totals, details and history honor the caller's data boundary; hiding a button is not the security mechanism.
+- **Server-side session revocation:** every authenticated request re-checks the account's lock state and session version in the database. Locking an account throws its live session out on the very next request, re-login is refused while it stays locked, and only an administrator can lock. The last active administrator cannot be locked out; a failed audit write rolls the lock back.
 - **Explicit workflow:** `Open → InProgress → Resolved → Closed`. Resolution requires notes. Only the requester or an administrator can close a resolved request.
 - **Optimistic concurrency:** requests carry the version the user saw. Stale changes receive HTTP 409 instead of silently overwriting another person's work.
 - **Database-enforced allocation rule:** a partial unique index permits only one active assignment per device. The application also checks this rule to provide a useful error.
@@ -70,6 +71,14 @@ dotnet list src/ServiceDesk/ServiceDesk.csproj package --vulnerable --include-tr
 ```
 
 Tests use isolated, real SQLite files, not EF's in-memory provider. They exercise the HTTP pipeline with `WebApplicationFactory`. See the verification report for actual results and unverified areas. The CI workflow targets Windows and Linux; a workflow file alone does not prove a successful CI run.
+
+## Account lockout and session revocation
+
+Administrators lock accounts with `POST /api/users/{id}/lock` (antiforgery token required, like every mutation). Locking writes `IsActive = false`, raises `SessionVersion`, and appends a `User Locked` audit event **in the same database transaction** — a failing audit insert rolls the whole lock back. Login rejects inactive accounts with the same generic 401 as a bad password, so lock state is not leaked on the login form. Users see `isActive` in the admin-only `/api/users` listing.
+
+Every request revalidates the cookie principal against the database (`IsActive`, `SessionVersion`); the cookies signed by earlier releases carry no version claim and are rejected on their first request, so upgrading signs everyone out once. Requests during a database outage are refused rather than trusted (fail closed). Validation logs only the user id and a reason — never passwords, cookies or headers.
+
+Boundaries: there is no unlock endpoint in this release (restoring an account requires an administrator to do it deliberately by editing the row with a schema-consistent tool); upgraded legacy databases gain both columns with safe defaults, so nobody is accidentally locked out by an upgrade.
 
 ## Upgrades, backups and restore
 

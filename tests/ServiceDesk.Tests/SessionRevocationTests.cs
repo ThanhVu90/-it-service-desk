@@ -20,6 +20,7 @@ public sealed class SessionRevocationTests
         var lockResponse = await admin.PostAsJsonAsync("/api/users/3/lock", new { });
         Assert.Equal(HttpStatusCode.NoContent, lockResponse.StatusCode);
         Assert.Equal(HttpStatusCode.Unauthorized, (await sam.GetAsync("/api/me")).StatusCode);
+        await DeskFactory.RefreshToken(sam);
         Assert.Equal(HttpStatusCode.Unauthorized, (await sam.PostAsJsonAsync("/api/login", new { email = "sam@example.test", password = DeskFactory.Password })).StatusCode);
         var users = await admin.GetFromJsonAsync<JsonElement>("/api/users");
         var samUser = users.EnumerateArray().Single(x => x.GetProperty("id").GetInt32() == 3);
