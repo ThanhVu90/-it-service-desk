@@ -154,6 +154,35 @@ namespace ServiceDesk.Data.Migrations
                     b.ToTable("Tickets");
                 });
 
+            modelBuilder.Entity("ServiceDesk.Domain.TicketComment", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("AuthorId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Body")
+                        .IsRequired()
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("TicketId")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("AuthorId");
+
+                    b.HasIndex("TicketId", "CreatedAt");
+
+                    b.ToTable("TicketComments");
+                });
+
             modelBuilder.Entity("ServiceDesk.Domain.User", b =>
                 {
                     b.Property<int>("Id")
@@ -229,6 +258,21 @@ namespace ServiceDesk.Data.Migrations
                     b.HasOne("ServiceDesk.Domain.User", null)
                         .WithMany()
                         .HasForeignKey("RequesterId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
+            modelBuilder.Entity("ServiceDesk.Domain.TicketComment", b =>
+                {
+                    b.HasOne("ServiceDesk.Domain.User", null)
+                        .WithMany()
+                        .HasForeignKey("AuthorId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+
+                    b.HasOne("ServiceDesk.Domain.Ticket", null)
+                        .WithMany()
+                        .HasForeignKey("TicketId")
                         .OnDelete(DeleteBehavior.Restrict)
                         .IsRequired();
                 });

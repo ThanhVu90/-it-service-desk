@@ -123,6 +123,17 @@ api.MapPost("/tickets", async (CreateTicket input, DeskService service, HttpCont
     return Results.Created($"/api/tickets/{ticket.Id}", ticket);
 });
 api.MapPost("/tickets/{id:int}/transition", async (int id, ChangeTicket input, DeskService service, HttpContext c) => Results.Ok(await service.Transition(Current(c), id, input.Version, input.Status, input.Resolution)));
+api.MapGet("/tickets/{id:int}/comments", async (int id, DeskService service, HttpContext c, int page = 1, int pageSize = 20) =>
+{
+    if (page < 1 || page > 100000 || pageSize < 1 || pageSize > 50) throw new RuleException(400, "Invalid page size.");
+    var (total, items) = await service.ListComments(Current(c), id, page, pageSize);
+    return Results.Ok(new { total, page, pageSize, items });
+});
+api.MapPost("/tickets/{id:int}/comments", async (int id, AddComment input, DeskService service, HttpContext c) =>
+{
+    var comment = await service.AddComment(Current(c), id, input.Body);
+    return Results.Created($"/api/tickets/{id}/comments/{comment.Id}", comment);
+});
 api.MapGet("/assets", async (DeskDb db, HttpContext c) =>
 {
     var actor = Current(c);
@@ -161,6 +172,7 @@ static Actor Current(HttpContext context) => new(int.Parse(context.User.FindFirs
 public sealed record LoginRequest(string? Email, string? Password);
 public sealed record CreateTicket(string? Title, string? Description, Priority Priority);
 public sealed record ChangeTicket(int Version, TicketStatus Status, string? Resolution);
+public sealed record AddComment(string? Body);
 public sealed record CreateAsset(string? Tag, string? Model);
 public sealed record AssignAsset(int UserId, int Version);
 public sealed record ReturnAsset(int Version);

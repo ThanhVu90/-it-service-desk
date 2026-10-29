@@ -6,7 +6,7 @@ const date = value => new Date(value).toLocaleString([], {month:'short',day:'num
 async function token(){ csrf = (await (await fetch('/api/csrf')).json()).token; }
 async function api(path, data){
  const response = await fetch('/api'+path, {method:data === undefined?'GET':'POST',headers:data === undefined?{}:{'Content-Type':'application/json','X-CSRF-TOKEN':csrf},body:data === undefined?undefined:JSON.stringify(data)});
- if(!response.ok){const error=await response.json().catch(()=>({}));if(response.status===401 && path!='/login'){me=null;$('workspace').hidden=true;$('login-view').hidden=false;await token();}throw new Error(error.title || `Request failed (${response.status}).`);}
+ if(!response.ok){const error=await response.json().catch(()=>({}));if(response.status===401 && path!=='/login'){me=null;$('workspace').hidden=true;$('login-view').hidden=false;await token();}throw new Error(error.title || `Request failed (${response.status}).`);}
  return response.status===204?null:response.json();
 }
 function notify(message){$('notice').textContent=message;$('notice').hidden=false;}
@@ -29,8 +29,9 @@ async function openTicket(id){
  if(t.status==='Open'&&me.role!=='Employee')action='<button data-transition="InProgress">Take ownership</button>';
  if(t.status==='InProgress'&&(me.role==='Admin'||me.id===t.assigneeId))action='<label>Resolution notes<textarea id="resolution" maxlength="2000" placeholder="What changed and how did you verify it?"></textarea></label><button data-transition="Resolved">Mark resolved</button>';
  if(t.status==='Resolved'&&(me.role==='Admin'||me.id===t.requesterId))action='<button data-transition="Closed">Confirm & close</button>';
- $('detail-content').innerHTML=`<p class="eyebrow">REQ-${String(t.id).padStart(4,'0')} / VERSION ${t.version}</p><h2>${esc(t.title)}</h2><span class="badge ${esc(t.status)}">${esc(t.status)}</span> <span class="badge ${esc(t.priority)}">${esc(t.priority)}</span><p class="detail-description">${esc(t.description)}</p><p class="muted">Due ${date(t.dueAt)} · Requester #${t.requesterId}${t.assigneeId?' · Assigned to #'+t.assigneeId:''}</p>${t.resolution?'<h3>Resolution</h3><p class="detail-description">'+esc(t.resolution)+'</p>':''}<h3>Activity</h3><div class="timeline">${audit.map(a=>`<p>${esc(a.action)}<small>${date(a.at)} · User #${a.actorId}</small></p>`).join('')||'<p class="muted">Seeded sample · no changes yet.</p>'}</div><div>${action}</div><p id="detail-error" class="error" role="alert"></p>`;
+ $('detail-content').innerHTML=`<p class="eyebrow">REQ-${String(t.id).padStart(4,'0')} / VERSION ${t.version}</p><h2>${esc(t.title)}</h2><span class="badge ${esc(t.status)}">${esc(t.status)}</span> <span class="badge ${esc(t.priority)}">${esc(t.priority)}</span><p class="detail-description">${esc(t.description)}</p><p class="muted">Due ${date(t.dueAt)} · Requester #${t.requesterId}${t.assigneeId?' · Assigned to #'+t.assigneeId:''}</p>${t.resolution?'<h3>Resolution</h3><p class="detail-description">'+esc(t.resolution)+'</p>':''}<h3>Activity</h3><div class="timeline">${audit.map(a=>`<p>${esc(a.action)}<small>${date(a.at)} · User #${a.actorId}</small></p>`).join('')||'<p class="muted">Seeded sample · no changes yet.</p>'}</div><h3>Discussion</h3><div id="discussion"></div><form id="comment-form"><label>Reply<textarea id="comment-text" maxlength="2000" required placeholder="Add context or ask a question that belongs to this request..."></textarea></label><button type="submit">Send reply</button><p id="comment-error" class="error" role="alert"></p></form><div>${action}</div><p id="detail-error" class="error" role="alert"></p>`;
  for(const button of document.querySelectorAll('[data-transition]'))button.onclick=async()=>{button.disabled=true;try{await api(`/tickets/${t.id}/transition`,{version:t.version,status:button.dataset.transition,resolution:$('resolution')?.value});await loadTickets();await openTicket(t.id);}catch(error){$('detail-error').textContent=error.message;}finally{button.disabled=false;}};
+ loadComments(t.id,$('discussion'));
  if(!$('detail').open)$('detail').showModal();
 }
 function editor(title,fields,action){$('editor-title').textContent=title;$('editor-fields').innerHTML=fields;$('editor-error').textContent='';editAction=action;$('editor').showModal();}
@@ -50,4 +51,42 @@ async function loadAssets(){
 function selectSection(assets){$('ticket-section').hidden=assets;$('asset-section').hidden=!assets;$('new-ticket').hidden=assets;$('nav-assets').classList.toggle('active',assets);$('nav-tickets').classList.toggle('active',!assets);$('page-heading').textContent=$('section-label').textContent=assets?'Device inventory':'Support queue';$('page-description').textContent=assets?'Know where each device is, and who is responsible for it.':'Track requests, take ownership and keep a clear record.';$('notice').hidden=true;}
 $('nav-assets').onclick=guarded(async()=>{selectSection(true);await loadAssets();});$('nav-tickets').onclick=guarded(async()=>{selectSection(false);await loadTickets();});
 $('new-asset').onclick=()=>editor('Register a device','<label>Asset tag<input name="tag" required maxlength="40" placeholder="LT-003"></label><label>Model<input name="model" required maxlength="160" placeholder="Model and specification"></label>',async data=>{await api('/assets',data);await loadAssets();notify('Device registered.');});
+async function loadComments(ticketId, container){
+ try{
+  const result=await api(`/tickets/${ticketId}/comments?page=1&pageSize=50`);
+  renderComments(container,result);
+  const form=$('comment-form'),text=$('comment-text'),error=$('comment-error');
+  form.onsubmit=async event=>{
+   event.preventDefault();error.textContent='';
+   try{await api(`/tickets/${currentTicket.id}/comments`,{body:text.value});text.value='';notify('Reply saved to the request history.');await loadComments(currentTicket.id,container);}
+   catch(exception){error.textContent=exception.message;}
+  };
+ }
+ catch(error){
+  container.textContent='';
+  const failure=document.createElement('p');failure.className='muted';failure.textContent='Replies could not be loaded: '+error.message;container.appendChild(failure);
+ }
+}
+function renderComments(container,result){
+ container.textContent='';
+ const items=Array.isArray(result&&result.items)?result.items:[];
+ if(items.length===0){
+  const empty=document.createElement('p');empty.className='muted';
+  empty.textContent='No replies yet. Clarifying questions and context belong here.';
+  container.appendChild(empty);
+  return;
+ }
+ for(const comment of items){
+  const entry=document.createElement('article');entry.className='comment';
+  const byline=document.createElement('p');byline.className='comment-by';
+  byline.textContent=`User #${comment.authorId} · ${date(comment.createdAt)}`;
+  const body=document.createElement('p');body.className='comment-body';
+  body.textContent=comment.body;
+  entry.append(byline,body);
+  container.appendChild(entry);
+ }
+ const count=document.createElement('p');count.className='muted';
+ count.textContent=`Showing ${items.length} of ${result.total} ${result.total===1?'reply':'replies'}.`;
+ if(items.length<result.total)container.appendChild(count);
+}
 (async()=>{await token();try{me=await api('/me');await showWorkspace();}catch{/* A signed-out session is expected on first visit. */}})();

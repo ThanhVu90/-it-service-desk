@@ -9,6 +9,7 @@ public sealed class DeskDb(DbContextOptions<DeskDb> options) : DbContext(options
     public DbSet<Asset> Assets => Set<Asset>();
     public DbSet<Assignment> Assignments => Set<Assignment>();
     public DbSet<AuditEvent> AuditEvents => Set<AuditEvent>();
+    public DbSet<TicketComment> TicketComments => Set<TicketComment>();
     protected override void OnModelCreating(ModelBuilder b)
     {
         var utc = new Microsoft.EntityFrameworkCore.Storage.ValueConversion.ValueConverter<DateTime, DateTime>(v => v, v => DateTime.SpecifyKind(v, DateTimeKind.Utc));
@@ -34,6 +35,11 @@ public sealed class DeskDb(DbContextOptions<DeskDb> options) : DbContext(options
         b.Entity<Assignment>().HasOne<Asset>().WithMany().HasForeignKey(x => x.AssetId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<Assignment>().HasOne<User>().WithMany().HasForeignKey(x => x.UserId).OnDelete(DeleteBehavior.Restrict);
         b.Entity<AuditEvent>().HasOne<User>().WithMany().HasForeignKey(x => x.ActorId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<TicketComment>().Property(x => x.CreatedAt).HasConversion(utc);
+        b.Entity<TicketComment>().Property(x => x.Body).HasMaxLength(2000);
+        b.Entity<TicketComment>().HasOne<Ticket>().WithMany().HasForeignKey(x => x.TicketId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<TicketComment>().HasOne<User>().WithMany().HasForeignKey(x => x.AuthorId).OnDelete(DeleteBehavior.Restrict);
+        b.Entity<TicketComment>().HasIndex(x => new { x.TicketId, x.CreatedAt });
     }
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {

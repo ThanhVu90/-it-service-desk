@@ -79,6 +79,25 @@ public sealed class DeskService(DeskDb db, TimeProvider clock)
         Audit(actor, "User", userId, "Locked (account revoked)");
         await db.SaveChangesAsync(); // EF wraps the lock and the audit insert in one transaction; failed audit lock rolls back.
     }
+    public async Task<TicketComment> AddComment(Actor actor, int ticketId, string? body)
+    {
+        var text = Rules.Text(body, "Comment", 2000);
+        var ticket = await Visible(actor).SingleOrDefaultAsync(x => x.Id == ticketId) ?? throw new RuleException(404, "Ticket not found.");
+        var comment = new TicketComment { TicketId = ticket.Id, AuthorId = actor.Id, Body = text, CreatedAt = clock.GetUtcNow().UtcDateTime };
+        db.TicketComments.Add(comment);
+        Audit(actor, "Ticket", ticket.Id, "Commented");
+        await db.SaveChangesAsync(); // EF wraps the comment and the audit entry in one transaction; a failed audit rolls the comment back.
+        return comment;
+    }
+
+    public async Task<(int Total, TicketComment[] Items)> ListComments(Actor actor, int ticketId, int page, int pageSize)
+    {
+        if (!await Visible(actor).AnyAsync(x => x.Id == ticketId)) throw new RuleException(404, "Ticket not found.");
+        var query = db.TicketComments.AsNoTracking().Where(x => x.TicketId == ticketId);
+        var items = await query.OrderBy(x => x.CreatedAt).ThenBy(x => x.Id).Skip((page - 1) * pageSize).Take(pageSize).ToArrayAsync();
+        return (await query.CountAsync(), items);
+    }
+
     private static void RequireAdmin(Actor actor)
     {
         if (actor.Role != Roles.Admin) throw new RuleException(403, "Administrator access required.");

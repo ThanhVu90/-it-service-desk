@@ -1,3 +1,13 @@
+# Verification evidence — 29 October 2026 (addendum: P1-1 ticket comments)
+
+P1-1 (comments within ticket visibility) landed on branch `upgrade/p1-1-ticket-comments`:
+
+- Migration `20261029152456_TicketComments` adds the `TicketComments` table (body ≤ 2000, index on `TicketId, CreatedAt`, restrictive FKs to Tickets/Users).
+- Acceptance tests written first (7, in `CommentTests`): 6 red before the implementation (missing endpoints), 1 guard already green; the full suite then reached **49 passed, 0 failed** (42 prior + 7 new).
+- Endpoints: `GET /api/tickets/{id}/comments` (paging 1..50, ordered by `CreatedAt` then `Id` so same-timestamp rows never duplicate or drop) and `POST /api/tickets/{id}/comments` (validation: non-empty, ≤ 2000 chars). Both resolve the ticket through the caller's visibility boundary, so outsiders get 404 both for reading and writing.
+- The comment insert and the `Commented` audit entry commit in one transaction; an injected audit failure rolls the comment back (409).
+- The UI adds a `Discussion` section in the ticket dialog. Comment text is stored and served as plain data and rendered with `createElement`/`textContent` only — a static test proves `renderComments` (kept as the file's last function) contains no `innerHTML`.
+
 # Verification evidence — 29 October 2026 (addendum: P0-2 session revocation)
 
 P0-2 (lock accounts, revoke live sessions) landed on branch `upgrade/p0-2-session-revocation`:
