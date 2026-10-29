@@ -59,6 +59,7 @@ The four seeded users share the password you choose. There is no embedded defaul
 - **Optimistic concurrency:** requests carry the version the user saw. Stale changes receive HTTP 409 instead of silently overwriting another person's work.
 - **Database-enforced allocation rule:** a partial unique index permits only one active assignment per device. The application also checks this rule to provide a useful error.
 - **Atomic audit history:** the mutation and audit entry commit together. A test injects an audit write failure and verifies the new ticket rolls back.
+- **Ticket discussion:** every visible request has a threaded reply area. Comments are plain text (max 2000 chars, bounded paging 1..50), stored in `TicketComments` with an audit entry in the same transaction, and rendered by the UI with `textContent` nodes only — never `innerHTML`.
 - **UTC deadlines:** high priority is 4 elapsed hours, normal 24 and low 72. This is intentionally not a business-hours/calendar SLA.
 - **Browser protections:** password hashing, HttpOnly/SameSite cookies, antiforgery checks on mutations including login, login throttling, escaped user text and a restrictive content security policy.
 
