@@ -17,6 +17,7 @@ public sealed class DeskDb(DbContextOptions<DeskDb> options) : DbContext(options
         b.Entity<Assignment>().Property(x => x.AssignedAt).HasConversion(utc);
         b.Entity<Assignment>().Property(x => x.ReturnedAt).HasConversion(utc);
         b.Entity<AuditEvent>().Property(x => x.At).HasConversion(utc);
+        b.Entity<AuditEvent>().HasIndex(x => new { x.Entity, x.EntityId });
         b.Entity<User>().HasIndex(x => x.Email).IsUnique();
         b.Entity<User>().Property(x => x.Email).HasMaxLength(254);
         b.Entity<Ticket>().Property(x => x.Version).IsConcurrencyToken();
