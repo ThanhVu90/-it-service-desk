@@ -60,7 +60,7 @@ The four seeded users share the password you choose. There is no embedded defaul
 - **Database-enforced allocation rule:** a partial unique index permits only one active assignment per device. The application also checks this rule to provide a useful error.
 - **Atomic audit history:** the mutation and audit entry commit together. A test injects an audit write failure and verifies the new ticket rolls back.
 - **Ticket discussion:** every visible request has a threaded reply area. Comments are plain text (max 2000 chars, bounded paging 1..50), stored in `TicketComments` with an audit entry in the same transaction, and rendered by the UI with `textContent` nodes only — never `innerHTML`.
-- **UTC deadlines:** high priority is 4 elapsed hours, normal 24 and low 72. This is intentionally not a business-hours/calendar SLA.
+- **Operational readiness and traceability:** `/health` answers only that the process is alive; the new `/health/ready` verifies the database is reachable **and** every migration is applied, returning 503 (with no connection details) otherwise — fail closed. Every response carries a short correlation id (caller values of 8–64 ASCII alphanumerics are honored), error bodies include the same id, and error logs record it together with method and path. Passwords, cookies, headers and connection strings never appear in logs or error bodies.
 - **Browser protections:** password hashing, HttpOnly/SameSite cookies, antiforgery checks on mutations including login, login throttling, escaped user text and a restrictive content security policy.
 
 ## Build and test
