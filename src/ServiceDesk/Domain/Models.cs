@@ -58,6 +58,14 @@ public sealed class AuditEvent
     public string Action { get; set; } = "";
     public DateTime At { get; set; }
 }
+public sealed class TicketComment
+{
+    public int Id { get; set; }
+    public int TicketId { get; set; }
+    public int AuthorId { get; set; }
+    public string Body { get; set; } = "";
+    public DateTime CreatedAt { get; set; }
+}
 public sealed record Actor(int Id, string Role)
 {
     public bool IsStaff => Role is Roles.Admin or Roles.Technician;
