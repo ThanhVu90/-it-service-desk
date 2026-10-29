@@ -16,6 +16,7 @@ public sealed class DeskFactory : WebApplicationFactory<Program>
 {
     public const string Password = "Test-only-password-42!";
     private readonly string database = Path.Combine(Path.GetTempPath(), $"desk-tests-{Guid.NewGuid():N}.db");
+    public string DatabasePath => database;
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         builder.UseEnvironment("Testing");
