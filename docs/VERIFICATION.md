@@ -7,7 +7,7 @@ P0-1 (controlled migrations, legacy adoption, backup/restore) was implemented on
 - Hand-run demo from a clean file: fresh start migrated + seeded (`FreshMigrated`), CLI `db-backup` produced a 73728-byte snapshot, CLI `db-restore` passed the integrity check, and a second instance booted on the restored copy reporting `AlreadyCurrent`, answered `/health` with 200 and rejected a wrong login with 401 after a real read of the restored `Users` table.
 - A first e2e attempt exposed a real bug (migration history misread as a legacy schema because `__EFMigrationsHistory` was filtered out of inspection). Fixed, with a regression test written first (`Database_with_migration_history_is_never_adopted_as_legacy_on_restart`).
 - Details, acceptance criteria mapping and demo flow: `docs/evidence/2026-10-29-p0-1-migration.md`.
-- CI for this branch: pending — this file will be updated with the run link after push. Do not advertise the CI badge for this branch yet.
+- CI for this branch: run 40895759648 (pull_request, Windows and Ubuntu) — **success** on the code commits; the docs-only commit that adds this line triggers a re-run with the same test suite. Dashboard: https://github.com/ThanhVu90/-it-service-desk/actions/runs/40895759648
 
 # Verification evidence — 27 October 2026
 
