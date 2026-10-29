@@ -71,12 +71,36 @@ dotnet list src/ServiceDesk/ServiceDesk.csproj package --vulnerable --include-tr
 
 Tests use isolated, real SQLite files, not EF's in-memory provider. They exercise the HTTP pipeline with `WebApplicationFactory`. See the verification report for actual results and unverified areas. The CI workflow targets Windows and Linux; a workflow file alone does not prove a successful CI run.
 
+## Upgrades, backups and restore
+
+The SQLite schema is versioned with EF Core migrations. At startup the application reserves one of four bootstrap outcomes and never mixes them up:
+
+| Outcome | When | What happens |
+|---|---|---|
+| `FreshMigrated` | Empty or brand-new database file | Applies every migration in order and seeds only when demo seeding is enabled |
+| `AlreadyCurrent` | Migration history is present and complete | No schema work, no snapshot |
+| `Migrated` | History present, newer migrations pending | Saves a safety snapshot, then migrates forward |
+| `LegacyAdopted` | Tables exist but no migration history (pre-migration release) | Saves a snapshot, verifies the tables, columns and named indexes against the baseline migration, registers the baseline as applied, then upgrades |
+
+If the existing schema does not match the baseline migration, startup **refuses to adopt**, leaves a data snapshot in `backups/` next to the database file, logs the path, and exits with an error instead of starting with a half-upgraded schema. Snapshots use the SQLite backup API (not a plain file copy), so they remain consistent even while the server is running, and each one passes an `integrity_check` before being kept. Deleting the database file is safe: a fresh one is recreated from migrations, nothing outside it holds schema state.
+
+Backup and restore commands (no web app startup, no separate tooling):
+
+```powershell
+dotnet bin/Release/net10.0/ServiceDesk.dll db-backup  --source C:\path\desk.db --out C:\path\backups\desk-20261029.db
+dotnet bin/Release/net10.0/ServiceDesk.dll db-restore --source C:\path\backups\desk-20261029.db --out C:\path\restored-copy.db
+# then run with the restored copy:
+ConnectionStrings__Desk = "Data Source=C:\path\restored-copy.db;Foreign Keys=True"
+```
+
+`./scripts/backup-desk.ps1 -Source <path>` builds nothing to cloud services and wraps the same commands (`-Restore` for restore, `-Build` to force a rebuild). Destinations must not already exist unless `--force` is passed, so snapshots are never silently replaced. Forward-only: rollbacks use a snapshot or backup file, not migration `Down` scripts, and `__EFMigrationsHistory` is protected by the audit-style guardrails above.
+
 ## Repository map
 
 ```text
 src/ServiceDesk/
   Domain/       Entities, actor permissions and transition rules
-  Data/         EF mapping, constraints and explicit demo seed
+  Data/         EF mapping, constraints, versioned migrations and explicit demo seed
   Services/     Use cases and transaction boundaries
   Program.cs    Authentication, HTTP endpoints and error mapping
   wwwroot/      Responsive UI without a frontend build toolchain
@@ -87,9 +111,9 @@ docs/                    Architecture and verification evidence
 
 ## Boundaries and next steps
 
-The verified release uses SQLite. A PostgreSQL provider can be selected with `ConnectionStrings__Postgres`; it remains **experimental and not yet integration-tested**. The demo bootstraps an empty database with `EnsureCreated`; versioned upgrade migrations are a next milestone. Do not point this demo at an existing business database.
+The verified release uses SQLite. A PostgreSQL provider can be selected with `ConnectionStrings__Postgres`; it remains **experimental, still fed through `EnsureCreated` at startup, and not yet integration-tested** — it gets no migrations and no backup CLI until dedicated tests exist. Do not point this demo at an existing business database. Schema upgrades are forward-only for SQLite: a rollback means restoring a snapshot, and `git revert` of the application build does not downgrade a database.
 
-Before production use: replace seeded users with a real provisioning/identity flow, implement account revocation/password recovery, review encryption and shared key storage, add database migrations and PostgreSQL integration tests, configure trusted proxy handling and HTTPS, and implement backups/restore tests. Audit rows are append-only through application code; they are not tamper-proof against a database administrator. Login throttling is per process and remote IP, not distributed. Asset inventory is currently unpaged, appropriate for the small demo only. No notification delivery, attachments, business calendar or uptime guarantee is claimed.
+Before production use: replace seeded users with a real provisioning/identity flow, implement account revocation/password recovery, review encryption and shared key storage, add PostgreSQL integration tests, configure trusted proxy handling and HTTPS, and schedule off-machine backups with retention. Migration adoption compares the visible schema only; row-level corruption is caught by the `integrity_check` after backup/restore, but content mismatches inside correct schema are out of scope. Audit rows are append-only through application code; they are not tamper-proof against a database administrator. Login throttling is per process and remote IP, not distributed. Asset inventory is currently unpaged, appropriate for the small demo only. No notification delivery, attachments, business calendar or uptime guarantee is claimed.
 
 Developed with AI assistance.
 
