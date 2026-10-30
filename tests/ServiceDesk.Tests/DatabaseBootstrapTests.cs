@@ -274,6 +274,7 @@ public sealed class DatabaseBootstrapTests : IDisposable
     [InlineData("NOT NULL", "\"Role\" TEXT NOT NULL", "\"Role\" TEXT")]
     [InlineData("a column type", "\"Role\" TEXT NOT NULL", "\"Role\" INTEGER NOT NULL")]
     [InlineData("a foreign key", ", CONSTRAINT \"FK_Assignments_Users_UserId\" FOREIGN KEY (\"UserId\") REFERENCES \"Users\" (\"Id\") ON DELETE RESTRICT )", " )")]
+    [InlineData("a foreign key target", "FOREIGN KEY (\"UserId\") REFERENCES \"Users\"", "FOREIGN KEY (\"UserId\") REFERENCES \"Assets\"")]
     [InlineData("a partial index condition", " WHERE \"ReturnedAt\" IS NULL", "")]
     public async Task Schema_that_lost_semantics_never_matches_the_baseline_fingerprint(string loss, string search, string replace)
     {
