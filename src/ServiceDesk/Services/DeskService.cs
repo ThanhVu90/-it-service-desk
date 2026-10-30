@@ -71,13 +71,27 @@ public sealed class DeskService(DeskDb db, TimeProvider clock)
         var target = await db.Users.FindAsync(userId) ?? throw new RuleException(404, "User not found.");
         if (target.Role == Roles.Admin)
         {
-            var otherActiveAdmins = await db.Users.CountAsync(x => x.Role == Roles.Admin && x.IsActive && x.Id != userId);
-            if (otherActiveAdmins == 0) throw new RuleException(409, "The last active administrator cannot be locked out.");
+            // Serializable maps to BEGIN IMMEDIATE in Microsoft.Data.Sqlite: the database write lock is taken
+            // BEFORE the "other active admins" count is read, so concurrent lock requests serialize at the
+            // database and can never both pass the last-admin guard. A check outside this transaction (as
+            // SaveChangesAsync alone provides) would let two requests lock the last two admins.
+            await using var guard = await db.Database.BeginTransactionAsync(System.Data.IsolationLevel.Serializable);
+            if (!await db.Users.AnyAsync(x => x.Role == Roles.Admin && x.IsActive && x.Id != userId))
+                throw new RuleException(409, "The last active administrator cannot be locked out.");
+            ApplyLock(actor, userId, target);
+            await db.SaveChangesAsync(); // The explicitly opened guard transaction covers the lock and the audit insert.
+            await guard.CommitAsync();
+            return;
         }
+        ApplyLock(actor, userId, target);
+        await db.SaveChangesAsync(); // EF wraps the lock and the audit insert in one transaction; failed audit lock rolls back.
+    }
+
+    private void ApplyLock(Actor actor, int userId, User target)
+    {
         target.IsActive = false;
         target.SessionVersion++;
         Audit(actor, "User", userId, "Locked (account revoked)");
-        await db.SaveChangesAsync(); // EF wraps the lock and the audit insert in one transaction; failed audit lock rolls back.
     }
     public async Task<TicketComment> AddComment(Actor actor, int ticketId, string? body)
     {

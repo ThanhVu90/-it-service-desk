@@ -104,7 +104,7 @@ dotnet bin/Release/net10.0/ServiceDesk.dll db-restore --source C:\path\backups\d
 ConnectionStrings__Desk = "Data Source=C:\path\restored-copy.db;Foreign Keys=True"
 ```
 
-`./scripts/backup-desk.ps1 -Source <path>` builds nothing to cloud services and wraps the same commands (`-Restore` for restore, `-Build` to force a rebuild). Destinations must not already exist unless `--force` is passed, so snapshots are never silently replaced. Forward-only: rollbacks use a snapshot or backup file, not migration `Down` scripts, and `__EFMigrationsHistory` is protected by the audit-style guardrails above.
+`./scripts/backup-desk.ps1 -Source <path>` builds nothing to cloud services and wraps the same commands (`-Restore` for restore, `-Build` to force a rebuild). Destinations must not already exist unless `--force` is passed, so snapshots are never silently replaced; with `--force` the copy is first built and verified at a temporary path next to the destination and only then replaces it, so a failed run keeps the old file intact and a `--source`/`--out` pair that resolves to the same file is refused instead of deleting the source. Forward-only: rollbacks use a snapshot or backup file, not migration `Down` scripts, and `__EFMigrationsHistory` is protected by the audit-style guardrails above.
 
 ## Repository map
 
