@@ -83,6 +83,35 @@ public sealed class SessionRevocationTests
     }
 
     [Fact]
+    public async Task Two_concurrent_admin_locks_never_leave_zero_active_administrators()
+    {
+        using var app = new DeskFactory();
+        using (var scope = app.Services.CreateScope())
+        {
+            var db = scope.ServiceProvider.GetRequiredService<DeskDb>();
+            db.Users.Add(new User
+            {
+                Name = "Second Admin",
+                Email = "second-admin@example.test",
+                Role = Roles.Admin,
+                PasswordHash = new Microsoft.AspNetCore.Identity.PasswordHasher<User>().HashPassword(new User(), DeskFactory.Password)
+            });
+            await db.SaveChangesAsync();
+        }
+        using var firstAdmin = await app.Login("admin"); // user 4 locks user 5
+        using var secondAdmin = await app.Login("second-admin"); // user 5 locks user 4, at the same time
+        var lockSecond = firstAdmin.PostAsJsonAsync("/api/users/5/lock", new { });
+        var lockFirst = secondAdmin.PostAsJsonAsync("/api/users/4/lock", new { });
+        await Task.WhenAll(lockSecond, lockFirst);
+        var statuses = new[] { (await lockSecond).StatusCode, (await lockFirst).StatusCode };
+        Assert.Equal(1, statuses.Count(s => s == HttpStatusCode.NoContent)); // one race loser is refused, it may not succeed too
+
+        using var verify = app.Services.CreateScope();
+        var check = verify.ServiceProvider.GetRequiredService<DeskDb>();
+        Assert.Equal(1, await check.Users.AsNoTracking().CountAsync(x => x.Role == Roles.Admin && x.IsActive)); // at least one admin stays active
+    }
+
+    [Fact]
     public async Task Bumped_session_version_rejects_existing_cookies_without_a_lock()
     {
         using var app = new DeskFactory(); using var sam = await app.Login("sam");

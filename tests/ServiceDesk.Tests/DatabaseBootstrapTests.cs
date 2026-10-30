@@ -164,6 +164,157 @@ public sealed class DatabaseBootstrapTests : IDisposable
         Assert.Equal("guard content", File.ReadAllText(target));
     }
 
+    [Fact]
+    public async Task Forced_replace_writes_a_verified_copy_in_place_of_the_old_destination()
+    {
+        var live = Path.Combine(root, "live.db");
+        var stale = Path.Combine(root, "stale.db");
+        await using (var db = NewDb(live))
+        {
+            await db.Database.EnsureCreatedAsync();
+            db.Users.Add(new User { Email = "alex@example.test", Name = "Alex", Role = Roles.Employee, PasswordHash = "x" });
+            await db.SaveChangesAsync();
+        }
+        File.WriteAllText(stale, "stale content that was never a valid database");
+        var code = DbMaintenance.RunCli(["db-restore", "--source", live, "--out", stale, "--force"]);
+        Assert.Equal(0, code);
+        await using var verify = NewDb(stale);
+        Assert.Equal(1, await verify.Users.AsNoTracking().CountAsync());
+    }
+
+    [Fact]
+    public void Forced_replace_never_touches_the_destination_when_the_copy_fails()
+    {
+        var source = Path.Combine(root, "broken.db");
+        var target = Path.Combine(root, "guard.db");
+        File.WriteAllText(source, new string('G', 8192)); // unreadable as a SQLite database
+        File.WriteAllText(target, "guard content");
+        var code = DbMaintenance.RunCli(["db-backup", "--source", source, "--out", target, "--force"]);
+        Assert.Equal(3, code);
+        Assert.Equal("guard content", File.ReadAllText(target));
+        Assert.Empty(Directory.EnumerateFiles(root, "*.stage-*")); // the failed staging copy is cleaned up
+    }
+
+    [Fact]
+    public async Task RunCli_refuses_a_destination_that_resolves_to_the_source()
+    {
+        var file = Path.Combine(root, "self.db");
+        await using (var db = NewDb(file))
+        {
+            await db.Database.EnsureCreatedAsync();
+            db.Users.Add(new User { Email = "alex@example.test", Name = "Alex", Role = Roles.Employee, PasswordHash = "x" });
+            await db.SaveChangesAsync();
+        }
+        var before = File.ReadAllText(file);
+        Assert.Equal(3, DbMaintenance.RunCli(["db-backup", "--source", file, "--out", file]));
+        Assert.Equal(3, DbMaintenance.RunCli(["db-backup", "--source", file, "--out", file, "--force"]));
+        Assert.Equal(3, DbMaintenance.RunCli(["db-restore", "--source", file, "--out", file, "--force"]));
+        Assert.Equal(before, File.ReadAllText(file)); // the source survives every invocation, byte for byte
+    }
+
+    // A pre-migration database is reconstructed from the baseline migration's own DDL, so only the
+    // semantic detail under test separates it from a schema the initializer must still adopt.
+    private static async Task BuildLegacyDatabase(string file, string? search = null, string? replace = null)
+    {
+        await using var scratch = new DeskDb(new DbContextOptionsBuilder<DeskDb>().UseSqlite("Data Source=:memory:").Options);
+        await scratch.Database.OpenConnectionAsync();
+        await scratch.Database.MigrateAsync(scratch.Database.GetMigrations().First());
+        var source = (SqliteConnection)scratch.Database.GetDbConnection();
+        var statements = new List<string>();
+        await using (var read = source.CreateCommand())
+        {
+            // Entity DDL only: engine-shadowed tables (sqlite_sequence) and the EF-internal
+            // history tables are part of a fresh migration, not of a pre-migration release database.
+            read.CommandText = "SELECT name, sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY rowid";
+            var reader = await read.ExecuteReaderAsync();
+            await using (reader)
+                while (await reader.ReadAsync())
+                {
+                    var name = reader.GetString(0);
+                    if (name.StartsWith("sqlite_", StringComparison.OrdinalIgnoreCase) || name.StartsWith("__", StringComparison.Ordinal)) continue;
+                    statements.Add(reader.GetString(1));
+                }
+        }
+        await using var connection = new SqliteConnection($"Data Source={file};Pooling=False");
+        connection.Open();
+        var mutated = 0;
+        foreach (var statement in statements)
+        {
+            var executed = statement;
+            if (search != null)
+            {
+                // Compare and mutate on whitespace-normalized SQL so the mutation matches whatever line
+                // breaks the migration generator used; flattening never changes executed semantics.
+                var flat = System.Text.RegularExpressions.Regex.Replace(statement, @"\s+", " ");
+                if (flat.Contains(search))
+                {
+                    mutated++;
+                    executed = flat.Replace(search, replace!);
+                }
+            }
+            await using var command = connection.CreateCommand();
+            command.CommandText = executed;
+            await command.ExecuteNonQueryAsync();
+        }
+        if (search != null) Assert.Equal(1, mutated); // the mutation must land on exactly one statement, or the DDL drifted
+    }
+
+    [Fact]
+    public async Task Rebuilt_baseline_without_any_semantic_change_is_still_adopted()
+    {
+        var file = Path.Combine(root, "faithful-rebuild.db");
+        await BuildLegacyDatabase(file);
+        await using var db = NewDb(file);
+        var result = await DeskDbInitializer.InitializeAsync(db, NullLogger.Instance);
+        Assert.Equal(DatabaseBootstrapAction.LegacyAdopted, result.Action);
+    }
+
+    [Theory]
+    [InlineData("a UNIQUE constraint", "CREATE UNIQUE INDEX \"IX_Users_Email\"", "CREATE INDEX \"IX_Users_Email\"")]
+    [InlineData("NOT NULL", "\"Role\" TEXT NOT NULL", "\"Role\" TEXT")]
+    [InlineData("a column type", "\"Role\" TEXT NOT NULL", "\"Role\" INTEGER NOT NULL")]
+    [InlineData("a foreign key", ", CONSTRAINT \"FK_Assignments_Users_UserId\" FOREIGN KEY (\"UserId\") REFERENCES \"Users\" (\"Id\") ON DELETE RESTRICT )", " )")]
+    [InlineData("a partial index condition", " WHERE \"ReturnedAt\" IS NULL", "")]
+    public async Task Schema_that_lost_semantics_never_matches_the_baseline_fingerprint(string loss, string search, string replace)
+    {
+        var file = Path.Combine(root, $"lost-{loss.Replace(' ', '-')}.db");
+        await BuildLegacyDatabase(file, search, replace);
+        await using var db = NewDb(file);
+        var error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => DeskDbInitializer.InitializeAsync(db, NullLogger.Instance));
+        Assert.Contains("Schema does not match baseline", error.Message);
+        // The same database with the mutation applied is refused, while the faithful rebuild adopted:
+        // this test pair isolates exactly that semantic detail.
+    }
+
+    [Fact]
+    public async Task Failure_between_the_history_writes_leaves_no_half_created_history_table()
+    {
+        var file = Path.Combine(root, "interrupted-adoption.db");
+        await BuildLegacyDatabase(file);
+        DeskDbInitializer.BetweenHistoryWrites = () => throw new InvalidOperationException("injected failure between the two history writes");
+        try
+        {
+            await using var db = NewDb(file);
+            var error = await Assert.ThrowsAnyAsync<InvalidOperationException>(() => DeskDbInitializer.InitializeAsync(db, NullLogger.Instance));
+            Assert.Contains("injected failure", error.Message);
+        }
+        finally
+        {
+            DeskDbInitializer.BetweenHistoryWrites = null;
+        }
+        await using var verify = NewDb(file);
+        {
+            var connection = (SqliteConnection)verify.Database.GetDbConnection();
+            if (connection.State != System.Data.ConnectionState.Open) await connection.OpenAsync();
+            await using var command = connection.CreateCommand();
+            command.CommandText = "SELECT COUNT(*) FROM sqlite_master WHERE name = '__EFMigrationsHistory'";
+            Assert.Equal(0L, await command.ExecuteScalarAsync()); // rolled back: no history table without its baseline row
+        }
+        await using var retry = NewDb(file);
+        var adopted = await DeskDbInitializer.InitializeAsync(retry, NullLogger.Instance);
+        Assert.Equal(DatabaseBootstrapAction.LegacyAdopted, adopted.Action); // nothing half-written blocks the retry
+    }
+
     private static async Task<List<string>> IndexNames(DeskDb db, string table)
     {
         var connection = (SqliteConnection)db.Database.GetDbConnection();

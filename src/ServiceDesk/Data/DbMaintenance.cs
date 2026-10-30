@@ -8,6 +8,7 @@ public static class DbMaintenance
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        EnsureDistinctPaths(sourcePath, destinationPath);
         if (!File.Exists(sourcePath))
             throw new InvalidOperationException($"Source database '{sourcePath}' was not found.");
         if (File.Exists(destinationPath))
@@ -25,6 +26,7 @@ public static class DbMaintenance
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sourcePath);
         ArgumentException.ThrowIfNullOrWhiteSpace(destinationPath);
+        EnsureDistinctPaths(sourcePath, destinationPath);
         if (!File.Exists(sourcePath))
             throw new InvalidOperationException($"Snapshot '{sourcePath}' was not found.");
         if (File.Exists(destinationPath))
@@ -73,15 +75,16 @@ public static class DbMaintenance
         }
         try
         {
+            EnsureDistinctPaths(source, output);
             if (command == "db-backup")
             {
-                if (force && File.Exists(output)) File.Delete(output);
-                Backup(source, output);
+                if (force) ReplaceDestinationWithVerifiedCopy(source, output, Backup);
+                else Backup(source, output);
                 Console.WriteLine($"Backup complete: '{source}' -> '{output}' ({new FileInfo(output).Length} bytes).");
                 return 0;
             }
-            if (force && File.Exists(output)) File.Delete(output);
-            Restore(source, output);
+            if (force) ReplaceDestinationWithVerifiedCopy(source, output, Restore);
+            else Restore(source, output);
             Console.WriteLine($"Restore complete: '{source}' -> '{output}' (integrity check passed).");
             return 0;
         }
@@ -92,6 +95,34 @@ public static class DbMaintenance
         }
 
         static void PrintUsage() => Console.Error.WriteLine("Usage: ServiceDesk db-backup|db-restore --source <database.db> --out <target.db> [--force]");
+    }
+
+    private static void EnsureDistinctPaths(string sourcePath, string destinationPath)
+    {
+        // A `--out` that resolves to the same file as `--source` would otherwise be replaced
+        // with a copy of itself (or destroyed by an early delete), so it is refused up front.
+        var source = Path.GetFullPath(sourcePath);
+        var destination = Path.GetFullPath(destinationPath);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        if (!string.Equals(source, destination, comparison)) return;
+        throw new InvalidOperationException($"Source and destination resolve to the same file ('{source}'); refusing to operate on it so the source cannot be deleted or overwritten.");
+    }
+
+    // `--force` never deletes the destination first: the full copy is built and verified at a
+    // temporary path next to the destination, and only a verified stage is allowed to replace it.
+    private static void ReplaceDestinationWithVerifiedCopy(string sourcePath, string destinationPath, Action<string, string> copyCommand)
+    {
+        var destination = Path.GetFullPath(destinationPath);
+        var staged = Path.Combine(Path.GetDirectoryName(destination) ?? ".", Path.GetFileName(destination) + $".stage-{Guid.NewGuid():N}");
+        try
+        {
+            copyCommand(sourcePath, staged); // Backup/Restore verify the staged file (and delete it on integrity failure).
+            File.Move(staged, destination, overwrite: true);
+        }
+        finally
+        {
+            if (File.Exists(staged)) try { File.Delete(staged); } catch (IOException) { } catch (UnauthorizedAccessException) { }
+        }
     }
 
     private static void VerifyIntegrity(SqliteConnection connection, string databasePath, bool deleteOnFailure)

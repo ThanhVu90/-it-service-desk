@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Text.RegularExpressions;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
@@ -108,10 +109,10 @@ public static class DeskDbInitializer
     private static async Task<DbLayout> ReadLayoutAsync(SqliteConnection connection)
     {
         var tables = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
-        var indexes = new SortedDictionary<string, List<string>>(StringComparer.Ordinal);
+        var indexSql = new SortedDictionary<string, string>(StringComparer.Ordinal);
         await using (var master = connection.CreateCommand())
         {
-            master.CommandText = "SELECT name, type, tbl_name FROM sqlite_master";
+            master.CommandText = "SELECT name, type, tbl_name, sql FROM sqlite_master";
             var reader = await master.ExecuteReaderAsync();
             await using (reader)
                 while (await reader.ReadAsync())
@@ -125,8 +126,7 @@ public static class DeskDbInitializer
                             break;
                         case "index":
                             if (name.StartsWith("__", StringComparison.Ordinal)) continue;
-                            if (!indexes.TryGetValue(table, out var names)) indexes[table] = names = [];
-                            names.Add(name);
+                            if (!reader.IsDBNull(3)) indexSql[name] = reader.GetString(3);
                             break;
                     }
                 }
@@ -138,7 +138,13 @@ public static class DeskDbInitializer
             info.CommandText = $"PRAGMA table_info({Quote(table)})";
             var reader = await info.ExecuteReaderAsync();
             await using (reader)
-                while (await reader.ReadAsync()) columns.Add(reader.GetString(1));
+                while (await reader.ReadAsync())
+                {
+                    // The full column definition decides the fingerprint: declared type, NULL constraint,
+                    // primary-key position and the default clause, not just the column name.
+                    var fallback = reader.IsDBNull(4) ? "no-default" : Convert.ToString(reader.GetValue(4), CultureInfo.InvariantCulture) ?? "no-default";
+                    columns.Add($"{reader.GetString(1)}/{reader.GetString(2)}/notnull{reader.GetInt64(3)}/pk{reader.GetInt64(5)}/default{fallback}");
+                }
         }
         var knownEntities = tables.Keys.Where(KnownEntityTables.Contains).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var hasHistory = tables.ContainsKey(HistoryTable);
@@ -149,12 +155,58 @@ public static class DeskDbInitializer
         {
             if (table.StartsWith("__", StringComparison.Ordinal)) continue;
             builder.Append('T').Append(table).Append('{');
-            foreach (var column in columns) builder.Append('c').Append(column).Append(';');
-            if (indexes.TryGetValue(table, out var names))
-                foreach (var name in names) builder.Append('x').Append(name).Append(';');
+            foreach (var column in columns) builder.Append(column).Append(';');
+            await AppendForeignKeysAsync(connection, table, builder);
+            await AppendIndexesAsync(connection, table, builder, indexSql);
             builder.Append('}');
         }
         return new DbLayout(knownEntities, hasHistory, applied, builder.ToString());
+    }
+
+    // Foreign keys decide the fingerprint too: the referenced table, source column, target column and delete/update actions.
+    private static async Task AppendForeignKeysAsync(SqliteConnection connection, string table, System.Text.StringBuilder builder)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"PRAGMA foreign_key_list({Quote(table)})";
+        var reader = await command.ExecuteReaderAsync();
+        await using (reader)
+        {
+            var rules = new List<(long Id, long Seq, string Rule)>();
+            while (await reader.ReadAsync())
+            {
+                var target = reader.IsDBNull(4) ? "no-target" : reader.GetString(4);
+                rules.Add((reader.GetInt64(0), reader.GetInt64(1), $"{reader.GetString(3)}->{target}/{reader.GetString(5)}/{reader.GetString(6)}"));
+            }
+            foreach (var (_, _, rule) in rules.OrderBy(x => x.Id).ThenBy(x => x.Seq))
+                builder.Append('f').Append(rule).Append(';');
+        }
+    }
+
+    // Indexes decide the fingerprint beyond their names: uniqueness (explicit or enforced by a UNIQUE/PK constraint),
+    // their exact key columns, and for partial indexes the stored WHERE condition.
+    private static async Task AppendIndexesAsync(SqliteConnection connection, string table, System.Text.StringBuilder builder, SortedDictionary<string, string> indexSql)
+    {
+        await using var list = connection.CreateCommand();
+        list.CommandText = $"PRAGMA index_list({Quote(table)})";
+        var indexes = new SortedDictionary<string, (bool Unique, string Origin, bool Partial)>(StringComparer.Ordinal);
+        var names = await list.ExecuteReaderAsync();
+        await using (names)
+            while (await names.ReadAsync())
+                indexes[names.GetString(1)] = (names.GetInt64(2) != 0, names.GetString(3), names.GetInt64(4) != 0);
+        foreach (var (name, (unique, origin, partial)) in indexes)
+        {
+            await using var info = connection.CreateCommand();
+            info.CommandText = $"PRAGMA index_info({Quote(name)})";
+            var keyed = new SortedDictionary<long, string>();
+            var columns = await info.ExecuteReaderAsync();
+            await using (columns)
+                while (await columns.ReadAsync())
+                    keyed[columns.GetInt64(0)] = columns.IsDBNull(2) ? "#expression" : columns.GetString(2);
+            builder.Append('x').Append(name).Append('|').Append(unique ? "unique" : "non-unique").Append(origin).Append('/').Append(string.Join(',', keyed.Values));
+            if (partial && indexSql.TryGetValue(name, out var sql))
+                builder.Append("|where(").Append(Regex.Replace(sql, @"\s+", " ").Trim()).Append(')');
+            builder.Append(';');
+        }
     }
 
     private static async Task<string[]> ReadHistoryAsync(SqliteConnection connection)
@@ -170,16 +222,31 @@ public static class DeskDbInitializer
         }
     }
 
+    // Test seam only: lets tests inject a failure between the two history writes to prove they fail together.
+    internal static Action? BetweenHistoryWrites { get; set; }
+
     private static async Task MarkBaselineAppliedAsync(SqliteConnection connection, string baselineMigration, string productVersion)
     {
-        await using var create = connection.CreateCommand();
-        create.CommandText = $"CREATE TABLE \"{HistoryTable}\" (\"MigrationId\" TEXT NOT NULL CONSTRAINT \"PK___EFMigrationsHistory\" PRIMARY KEY, \"ProductVersion\" TEXT NOT NULL)";
-        await create.ExecuteNonQueryAsync();
-        await using var insert = connection.CreateCommand();
-        insert.CommandText = $"INSERT INTO \"{HistoryTable}\" (\"MigrationId\", \"ProductVersion\") VALUES (@id, @version)";
-        insert.Parameters.AddWithValue("@id", baselineMigration);
-        insert.Parameters.AddWithValue("@version", productVersion);
-        await insert.ExecuteNonQueryAsync();
+        // The history table and the baseline row must commit together or not at all. A failure in between
+        // would leave an "adopted" database with an empty history table, which the next start would treat
+        // as migration-managed and fail instead of re-adopting it.
+        await using var transaction = connection.BeginTransaction();
+        await using (var create = connection.CreateCommand())
+        {
+            create.Transaction = transaction;
+            create.CommandText = $"CREATE TABLE \"{HistoryTable}\" (\"MigrationId\" TEXT NOT NULL CONSTRAINT \"PK___EFMigrationsHistory\" PRIMARY KEY, \"ProductVersion\" TEXT NOT NULL)";
+            await create.ExecuteNonQueryAsync();
+            BetweenHistoryWrites?.Invoke();
+        }
+        await using (var insert = connection.CreateCommand())
+        {
+            insert.Transaction = transaction;
+            insert.CommandText = $"INSERT INTO \"{HistoryTable}\" (\"MigrationId\", \"ProductVersion\") VALUES (@id, @version)";
+            insert.Parameters.AddWithValue("@id", baselineMigration);
+            insert.Parameters.AddWithValue("@version", productVersion);
+            await insert.ExecuteNonQueryAsync();
+        }
+        await transaction.CommitAsync();
     }
 
     private static async Task<string> DescribeSchemaAsync(SqliteConnection connection) => (await ReadLayoutAsync(connection)).AsFingerprint();
