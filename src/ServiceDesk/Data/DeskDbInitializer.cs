@@ -163,7 +163,9 @@ public static class DeskDbInitializer
         return new DbLayout(knownEntities, hasHistory, applied, builder.ToString());
     }
 
-    // Foreign keys decide the fingerprint too: the referenced table, source column, target column and delete/update actions.
+    // Foreign keys decide the fingerprint too: the referenced table, source column, target column
+    // and delete/update actions. Without the referenced table, `UserId -> Users.Id` and
+    // `UserId -> Assets.Id` would produce the same fingerprint and a broken relation could adopt.
     private static async Task AppendForeignKeysAsync(SqliteConnection connection, string table, System.Text.StringBuilder builder)
     {
         await using var command = connection.CreateCommand();
@@ -175,7 +177,7 @@ public static class DeskDbInitializer
             while (await reader.ReadAsync())
             {
                 var target = reader.IsDBNull(4) ? "no-target" : reader.GetString(4);
-                rules.Add((reader.GetInt64(0), reader.GetInt64(1), $"{reader.GetString(3)}->{target}/{reader.GetString(5)}/{reader.GetString(6)}"));
+                rules.Add((reader.GetInt64(0), reader.GetInt64(1), $"{reader.GetString(2)}({reader.GetString(3)}->{target})/{reader.GetString(5)}/{reader.GetString(6)}"));
             }
             foreach (var (_, _, rule) in rules.OrderBy(x => x.Id).ThenBy(x => x.Seq))
                 builder.Append('f').Append(rule).Append(';');

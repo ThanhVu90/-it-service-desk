@@ -42,3 +42,11 @@ Every fix was proven by running its own test against the pre-fix code (temporary
 - Local run on one machine; the GitHub Actions run for the pushed commit re-executes the same suite.
 - The strict fingerprint flags legacy databases whose DDL spells out the same semantics differently (cosmetic whitespace is normalised, but e.g. `TEXT` vs `VARCHAR(80)` refuses) — adoption refusing such files is the intended safe behaviour and is covered by the control test.
 - The concurrency test depends on Microsoft.Data.Sqlite's busy handling for the waiting `BEGIN IMMEDIATE`; both requests wait or serialise rather than coring, asserted by the end state rather than by timing.
+
+## Follow-up (same day): the referenced table inside the foreign-key fingerprint
+
+A follow-up review pass caught a real gap in the first fingerprint fix: `AppendForeignKeysAsync` recorded the source column, target column and the update/delete actions but **not the referenced table itself**, so `Assignments.UserId -> Users.Id` and `Assignments.UserId -> Assets.Id` produced the same fingerprint and a database with a broken relation could have been adopted.
+
+- Fix: the rule string now starts with the referenced table from `PRAGMA foreign_key_list` column 2 (`Users(UserId->Id)/NO ACTION/RESTRICT`), so a foreign key that points at the wrong table no longer matches the baseline.
+- Test: theory case `a foreign key target` rebuilds the legacy database with `Assignments`' FK re-targeted from `Users` to `Assets` and requires adoption to refuse. Verified red against the unfixed helper (the mutant was adopted) and green with the fix.
+- Suite after the follow-up: **66 passed, 0 failed, 0 skipped** (65 + 1).
